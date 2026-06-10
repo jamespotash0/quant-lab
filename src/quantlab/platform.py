@@ -77,8 +77,10 @@ def build_state(start: str = START) -> dict:
     target_weights = {s: round(raw[s] * norm, 4) for s in syms if raw[s] * norm > 1e-6}
 
     # --- Regime context (HMM brain — informational, NOT what's traded). Walk no-lookahead. ---
+    # Only the last ~3y of steps are needed for the current regime + recent flicker; each
+    # update still refits on the full strict-past history, so this is faster, not less honest.
     eng = RegimeEngine()
-    for d in close.index:
+    for d in close.index[-756:]:
         eng.update(History(as_of=d, close=cast(Any, close.loc[:d]), open=cast(Any, open_.loc[:d])))
     proba = {r.label: 0.0 for r in Regime}
     for r, p in eng.predict_regime_proba().items():

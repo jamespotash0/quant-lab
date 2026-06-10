@@ -4,9 +4,10 @@ This layer is deliberately dumb and independent of the brain and the strategy. I
 realized account equity and, if losses breach a hard limit, flattens the book to cash —
 regardless of what the model "thinks". Two independent triggers:
 
-  * DRAWDOWN breaker: peak-to-current loss exceeds ``max_drawdown`` → flat until equity
-    recovers to within ``reentry_drawdown`` of the prior peak (hysteresis stops it
-    flip-flopping at the threshold).
+  * DRAWDOWN breaker: peak-to-current loss exceeds ``max_drawdown`` → flat for
+    ``cooldown_days`` sessions, then re-enter with a reset high-water mark (a cooldown,
+    not an equity-recovery trigger — in cash the equity is frozen, so a recovery trigger
+    could never fire and would stick the book in cash forever).
   * DAILY-LOSS breaker: a single-day loss worse than ``max_daily_loss`` → flat (then the
     drawdown rule governs re-entry).
 
@@ -26,13 +27,14 @@ class CircuitBreaker:
     def __init__(
         self,
         max_drawdown: float = 0.15,
-        reentry_drawdown: float = 0.07,
+        cooldown_days: int = 21,
         max_daily_loss: float = 0.05,
     ) -> None:
         self.max_drawdown = max_drawdown
-        self.reentry_drawdown = reentry_drawdown
+        self.cooldown_days = cooldown_days
         self.max_daily_loss = max_daily_loss
         self._tripped = False
+        self._cooldown = 0
         self._peak = float("-inf")
         self.trips = 0  # diagnostic: how many times it fired
 
@@ -43,9 +45,14 @@ class CircuitBreaker:
         self._peak = max(self._peak, current)
 
         if self._tripped:
-            # Re-enter only once we've climbed back to within reentry_drawdown of the peak.
-            if current >= self._peak * (1.0 - self.reentry_drawdown):
+            # Re-enter after a fixed cooldown, NOT when equity recovers — in cash the equity
+            # is frozen, so a recovery-based trigger could never fire (it would stick in cash
+            # forever). On re-entry we reset the high-water mark to the realized level, so we
+            # don't immediately re-trip on the stale pre-crash peak.
+            self._cooldown -= 1
+            if self._cooldown <= 0:
                 self._tripped = False
+                self._peak = current
             else:
                 return {}
 
@@ -54,6 +61,7 @@ class CircuitBreaker:
 
         if drawdown <= -self.max_drawdown or daily <= -self.max_daily_loss:
             self._tripped = True
+            self._cooldown = self.cooldown_days
             self.trips += 1
             return {}
         return pending
