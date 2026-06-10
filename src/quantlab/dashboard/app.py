@@ -300,28 +300,28 @@ def render_equity_curve(state: dict[str, Any]) -> None:
 
 def _equity_chart(curve_df: pd.DataFrame) -> "alt.LayerChart":
     """Multi-line equity chart with a shared crosshair tooltip that shows every
-    series' value at the hovered date (Strategy + S&P 500)."""
+    series' value at the hovered date (Strategy + S&P 500).
+
+    Crosshair + tooltip are anchored to the WIDE frame (one row per date) so the
+    nearest-date lookup is unambiguous and both series resolve every time. The lines
+    use a melted copy. Anchoring the selection to the long frame (two rows per date)
+    is what made the tooltip flicker between "labels only" and "values only".
+    """
     series = [c for c in curve_df.columns if c != "date"]
     long = curve_df.melt("date", value_vars=series, var_name="series", value_name="value")
 
-    base = alt.Chart(long).encode(
+    lines = alt.Chart(long).mark_line().encode(
         x=alt.X("date:T", title=None),
-        color=alt.Color("series:N", title=None,
-                        legend=alt.Legend(orient="top-left")),
+        y=alt.Y("value:Q", title="Equity ($)", axis=alt.Axis(format="$.2s")),
+        color=alt.Color("series:N", title=None, legend=alt.Legend(orient="top-left")),
     )
-    lines = base.mark_line().encode(
-        y=alt.Y("value:Q", title="Equity ($)", axis=alt.Axis(format="$,.0s")),
+
+    # One row per date → unambiguous nearest-date selection + reliable shared tooltip.
+    nearest = alt.selection_point(
+        nearest=True, on="pointermove", fields=["date"], empty=False, clear="pointerout",
     )
-    # Invisible vertical selector tracking the nearest date under the cursor.
-    nearest = alt.selection_point(nearest=True, on="mouseover", fields=["date"], empty=False)
-    selectors = base.mark_point().encode(opacity=alt.value(0)).add_params(nearest)
-    points = lines.mark_point(size=55).encode(
-        opacity=alt.condition(nearest, alt.value(1), alt.value(0)),
-    )
-    # One rule at the hovered date; pivot so a single tooltip lists both series.
     rule = (
-        alt.Chart(long)
-        .transform_pivot("series", value="value", groupby=["date"])
+        alt.Chart(curve_df)
         .mark_rule(color="gray")
         .encode(
             x="date:T",
@@ -329,8 +329,13 @@ def _equity_chart(curve_df: pd.DataFrame) -> "alt.LayerChart":
             tooltip=[alt.Tooltip("date:T", title="Date")]
             + [alt.Tooltip(f"{s}:Q", title=s, format="$,.0f") for s in series],
         )
+        .add_params(nearest)
     )
-    return cast(Any, alt.layer(lines, selectors, points, rule).interactive(bind_y=False))
+    # Highlight the marker on each line at the hovered date.
+    points = lines.mark_point(size=55, filled=True).encode(
+        opacity=alt.condition(nearest, alt.value(1), alt.value(0)),
+    )
+    return cast(Any, alt.layer(lines, points, rule).interactive(bind_y=False))
 
 
 # --------------------------------------------------------------------------- #
