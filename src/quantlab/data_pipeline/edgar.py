@@ -108,6 +108,9 @@ def annual_fundamentals(ticker: str) -> pd.DataFrame:
         "assets": annual(["Assets"]),
         "shares": annual(["EntityCommonStockSharesOutstanding",
                           "CommonStockSharesOutstanding"], unit="shares"),
+        "gross_profit": annual(["GrossProfit"]),
+        "cogs": annual(["CostOfRevenue", "CostOfGoodsAndServicesSold",
+                        "CostOfGoodsSold"]),
     }
     out = pd.DataFrame(cols).sort_index()
     out.index.name = "filed"
