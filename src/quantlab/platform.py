@@ -105,8 +105,22 @@ def build_state(start: str = START) -> dict:
     sampled = eq.iloc[::step]
     if len(eq) and sampled.index[-1] != eq.index[-1]:
         sampled = pd.concat([sampled, eq.iloc[-1:]])
-    equity_curve = [{"date": str(pd.Timestamp(cast(Any, d)).date()), "equity": round(float(v), 2)}
-                    for d, v in sampled.items()]
+    # Buy-and-hold S&P 500 (SPY) reference, normalized to the same $100k start so it overlays
+    # the strategy curve as an apples-to-apples benchmark.
+    sp_sampled = None
+    if spy is not None and len(eq):
+        spy_aligned = spy.reindex(eq.index).ffill().dropna()
+        if len(spy_aligned):
+            spy_curve = spy_aligned / float(spy_aligned.iloc[0]) * float(eq.iloc[0])
+            sp_sampled = spy_curve.reindex(sampled.index).ffill()
+    equity_curve = []
+    for d, v in sampled.items():
+        point = {"date": str(pd.Timestamp(cast(Any, d)).date()), "equity": round(float(v), 2)}
+        if sp_sampled is not None:
+            sv = sp_sampled.loc[d]
+            if pd.notna(sv):
+                point["sp500"] = round(float(sv), 2)
+        equity_curve.append(point)
     alerts = _alerts(st, breaker, res)
 
     return {

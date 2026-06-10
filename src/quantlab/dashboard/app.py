@@ -294,6 +294,7 @@ def render_equity_curve(state: dict[str, Any]) -> None:
     if "date" in curve_df.columns:
         curve_df["date"] = pd.to_datetime(curve_df["date"])
         curve_df = curve_df.set_index("date")
+    curve_df = curve_df.rename(columns={"equity": "Strategy", "sp500": "S&P 500"})
     st.line_chart(curve_df)
 
 
