@@ -117,7 +117,7 @@ def build_state(start: str = START) -> dict:
     for d, v in sampled.items():
         point = {"date": str(pd.Timestamp(cast(Any, d)).date()), "equity": round(float(v), 2)}
         if sp_sampled is not None:
-            sv = sp_sampled.loc[d]
+            sv = sp_sampled.loc[cast(Any, d)]
             if pd.notna(sv):
                 point["sp500"] = round(float(sv), 2)
         equity_curve.append(point)
