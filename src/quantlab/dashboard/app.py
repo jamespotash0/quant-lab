@@ -283,8 +283,9 @@ def render_regime_metadata(state: dict[str, Any]) -> None:
 
 def render_equity_curve(state: dict[str, Any]) -> None:
     st.subheader("Strategy backtest — simulated equity curve")
-    st.caption("This is the strategy's *simulated* history, NOT your live account. "
-               "Your real account is in the Live Paper Account section above.")
+    st.caption("Simulated history of $100,000 invested in the strategy from the start of the "
+               "backtest (2017) to today — NOT your live account. Your real account is in the "
+               "Live Paper Account section above.")
     curve = state.get("equity_curve") or []
     if not curve:
         st.info("No equity curve available.")

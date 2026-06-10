@@ -22,13 +22,15 @@ from dataclasses import asdict
 from ..backtest.costs import DEFAULT_COST, ZERO_COST
 from ..backtest.engine import run_backtest
 from ..backtest.metrics import compute_metrics
-from ..data_pipeline.loaders import load_bars
+from ..data_pipeline.yf_loader import load_bars  # research source: deep history (yfinance)
 from ..strategies.base import Strategy
 from ..universe import BENCHMARK, universe
 
-#: Standard evaluation window. Starts early enough that the 200-day warmup is spent on
-#: pre-2018 data, so the reported stats are an out-of-warmup, multi-regime sample.
-START = "2017-01-01"
+#: Standard evaluation window. yfinance reaches back to ETF inception, so we start deep
+#: enough to span real stress regimes (2008 GFC, 2011, 2015-16, 2018-Q4, 2020, 2022).
+#: Older ETFs trade from 2007; younger ones (e.g. XLRE, 2015) simply join the cross-section
+#: when they list — the strategies trade whatever is priced.
+START = "2007-01-01"
 
 
 def load_panel(start: str = START, end: str | None = None):

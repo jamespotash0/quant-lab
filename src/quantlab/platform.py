@@ -33,7 +33,7 @@ from .research.runner import START, load_panel
 STATE_PATH = DATA_DIR / "system_state.json"
 
 
-def build_state(start: str = START, equity_tail: int = 252) -> dict:
+def build_state(start: str = START) -> dict:
     """Run the orchestrator over history and assemble the dashboard system-state dict."""
     from .data_pipeline.loaders import to_panel
     from .research.regime_engine import RegimeEngine
@@ -97,9 +97,14 @@ def build_state(start: str = START, equity_tail: int = 252) -> dict:
         "is_flickering": eng.is_flickering(),
         "confidence": round(eng.confidence(), 3),
     }
-    tail = eq.iloc[-equity_tail:]
+    # Full backtest equity curve from the $100k start, downsampled to ~weekly to keep the
+    # payload light (the very first point is the $100k initial capital).
+    step = max(1, len(eq) // 400)
+    sampled = eq.iloc[::step]
+    if len(eq) and sampled.index[-1] != eq.index[-1]:
+        sampled = pd.concat([sampled, eq.iloc[-1:]])
     equity_curve = [{"date": str(pd.Timestamp(cast(Any, d)).date()), "equity": round(float(v), 2)}
-                    for d, v in tail.items()]
+                    for d, v in sampled.items()]
     alerts = _alerts(st, breaker, res)
 
     return {
