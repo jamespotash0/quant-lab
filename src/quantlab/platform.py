@@ -35,52 +35,90 @@ STATE_PATH = DATA_DIR / "system_state.json"
 
 def build_state(start: str = START, equity_tail: int = 252) -> dict:
     """Run the orchestrator over history and assemble the dashboard system-state dict."""
-    from .strategies.research.orchestrator import StrategyOrchestrator
+    from .data_pipeline.loaders import to_panel
+    from .research.regime_engine import RegimeEngine
+    from .research.vol_rank import vol_bucket, vol_rank
+    from .strategies.base import History
+    from .strategies.research.dual_momentum import DualMomentum
+    from .strategies.research.recommended import SwingMomentumV3
+    from .strategies.research.swing_breakout import SwingPivotBreakout
+    from .strategies.research.vol_managed import VolatilityManaged
 
     bars = load_panel(start)
-    orch = StrategyOrchestrator()
-    breaker = CircuitBreaker()
-    res = run_backtest(bars, orch, cost_model=DEFAULT_COST, risk_overlay=breaker)
-    eng = orch.engine
-    st = dict(orch.last_state)
 
-    # Regime posterior over the full 5-point scale.
+    # --- The strategy we actually trade: SwingMomentumV3 (under the circuit breaker). ---
+    breaker = CircuitBreaker()
+    res = run_backtest(bars, SwingMomentumV3(), cost_model=DEFAULT_COST, risk_overlay=breaker)
+    eq = res.equity
+
+    # --- Sleeve decomposition: where each weight comes from (DM 0.5 / Vol 0.25 / Swing 0.25). ---
+    close = to_panel(bars, "close")
+    open_ = to_panel(bars, "open")
+    asof = close.index.max()
+    h = History(as_of=asof, close=close, open=open_)
+    dm = DualMomentum().target_weights(h)
+    vm = VolatilityManaged().target_weights(h)
+    sw = SwingPivotBreakout().target_weights(h)
+    MIX = {"DualMomentum": 0.5, "VolatilityManaged": 0.25, "SwingPivotBreakout": 0.25}
+    syms = set(dm) | set(vm) | set(sw)
+    raw = {s: 0.5 * dm.get(s, 0.0) + 0.25 * vm.get(s, 0.0) + 0.25 * sw.get(s, 0.0) for s in syms}
+    gross = sum(raw.values())
+    norm = (1.0 / gross) if gross > 1.0 else 1.0
+    sleeve_decomposition = [
+        {"symbol": s,
+         "DualMomentum": round(0.5 * dm.get(s, 0.0) * norm, 4),
+         "VolatilityManaged": round(0.25 * vm.get(s, 0.0) * norm, 4),
+         "SwingPivotBreakout": round(0.25 * sw.get(s, 0.0) * norm, 4),
+         "total": round(raw[s] * norm, 4)}
+        for s in sorted(syms, key=lambda x: -raw[x]) if raw[s] * norm > 1e-6
+    ]
+    # The book we'd actually trade today = the fresh blend (matches quantlab.live),
+    # not the backtest's last *held* book (which may be mid-rebalance-cycle).
+    target_weights = {s: round(raw[s] * norm, 4) for s in syms if raw[s] * norm > 1e-6}
+
+    # --- Regime context (HMM brain — informational, NOT what's traded). Walk no-lookahead. ---
+    eng = RegimeEngine()
+    for d in close.index:
+        eng.update(History(as_of=d, close=cast(Any, close.loc[:d]), open=cast(Any, open_.loc[:d])))
     proba = {r.label: 0.0 for r in Regime}
     for r, p in eng.predict_regime_proba().items():
         proba[r.label] = round(float(p), 4)
-
     tm = eng.get_transition_matrix()
     transition = (
         {"index": list(tm.index), "columns": list(tm.columns),
          "data": [[round(float(v), 4) for v in row] for row in tm.to_numpy()]}
         if not tm.empty else {"index": [], "columns": [], "data": []}
     )
+    spy = close["SPY"].dropna() if "SPY" in close.columns else None
+    rank = vol_rank(spy) if spy is not None else 0.5
 
-    weights = res.weights.iloc[-1]
-    target_weights = {s: round(float(w), 4) for s, w in weights.items() if w > 1e-6}
-
-    eq = res.equity
+    st = {
+        "regime": eng.current_regime().label,
+        "is_flickering": eng.is_flickering(),
+        "confidence": round(eng.confidence(), 3),
+    }
     tail = eq.iloc[-equity_tail:]
     equity_curve = [{"date": str(pd.Timestamp(cast(Any, d)).date()), "equity": round(float(v), 2)}
                     for d, v in tail.items()]
-
     alerts = _alerts(st, breaker, res)
 
     return {
         "as_of": str(pd.Timestamp(eq.index.max()).date()),
-        "regime": st.get("regime", "Neutral"),
+        "strategy": "SwingMomentumV3",
+        "regime": st["regime"],
         "regime_proba": proba,
-        "confidence": st.get("confidence", 1.0),
-        "uncertainty": st.get("uncertainty", 0.0),
-        "regime_stability": st.get("regime_stability", 1.0),
-        "flicker_rate": st.get("flicker_rate", 0.0),
-        "is_flickering": st.get("is_flickering", False),
-        "vol_rank": st.get("vol_rank", 0.5),
-        "vol_bucket": st.get("vol_bucket", "mid"),
-        "active_strategy": st.get("active_strategy", "MidVolCautiousStrategy"),
-        "blend": st.get("strategy_blend", {}),
-        "gross_exposure": st.get("gross_exposure", 0.0),
+        "confidence": st["confidence"],
+        "uncertainty": round(eng.uncertainty(), 3),
+        "regime_stability": round(eng.get_regime_stability(), 3),
+        "flicker_rate": round(eng.get_regime_flicker_rate(), 3),
+        "is_flickering": st["is_flickering"],
+        "vol_rank": round(rank, 3),
+        "vol_bucket": vol_bucket(rank),
+        "active_strategy": "SwingMomentumV3",
+        "blend": MIX,
+        "gross_exposure": round(sum(target_weights.values()), 3),
         "target_weights": target_weights,
+        "sleeve_decomposition": sleeve_decomposition,
         "transition_matrix": transition,
         "regime_metadata": [
             {"regime": m.regime.label, "mean_return": round(m.mean_return, 4),

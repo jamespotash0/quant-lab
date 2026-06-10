@@ -30,6 +30,7 @@ import pandas as pd
 
 from .config import DATA_DIR, alpaca_config
 from .data_pipeline.loaders import load_bars, to_panel
+from .rationale import TRADE_LOG_PATH, explain_book, log_rationale
 from .strategies.base import History, Strategy
 from .strategies.research.dual_momentum import DualMomentum
 from .strategies.research.recommended import SwingMomentumV2, SwingMomentumV3
@@ -65,9 +66,9 @@ def check_safety_net(equity: float, max_drawdown: float) -> tuple[bool, float, f
     return (max_drawdown > 0 and drawdown <= -max_drawdown), peak, drawdown
 
 
-def target_book(strategy: Strategy) -> tuple[dict[str, float], str]:
+def target_book(strategy: Strategy) -> tuple[dict[str, float], str, pd.DataFrame]:
     """Compute the strategy's target weights as of the most recent available close.
-    Returns (weights, as_of_date). Pulls ~3y of history to cover the longest warmup."""
+    Returns (weights, as_of_date, close_panel). Pulls ~3y of history for warmup."""
     start = (pd.Timestamp.now(tz="UTC") - pd.DateOffset(years=3)).strftime("%Y-%m-%d")
     syms = sorted(set(universe()) | {BENCHMARK})
     bars = load_bars(syms, start, use_cache=True)
@@ -75,7 +76,26 @@ def target_book(strategy: Strategy) -> tuple[dict[str, float], str]:
     open_ = to_panel(bars, "open")
     as_of = close.index.max()
     weights = strategy.target_weights(History(as_of=as_of, close=close, open=open_))
-    return weights, str(as_of.date())
+    return weights, str(as_of.date()), close
+
+
+def latest_prices(symbols: list[str]) -> dict[str, float]:
+    """Most recent trade price per symbol, including pre-market/extended hours. Returns
+    {symbol: price}; missing symbols are omitted. Used to measure the overnight gap vs the
+    last close so a rebalance can see how the market moved before the open."""
+    cfg = alpaca_config()
+    if not cfg.is_configured or not symbols:
+        return {}
+    try:
+        from alpaca.data.historical import StockHistoricalDataClient
+        from alpaca.data.requests import StockLatestTradeRequest
+
+        client = StockHistoricalDataClient(cfg.api_key, cfg.secret_key)
+        trades = client.get_stock_latest_trade(
+            StockLatestTradeRequest(symbol_or_symbols=symbols))
+        return {s: float(t.price) for s, t in trades.items()}  # type: ignore[union-attr]
+    except Exception:
+        return {}
 
 
 def _client():
@@ -131,10 +151,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-drawdown", type=float, default=0.15,
                    help="broker safety net: flatten to cash if equity drawdown exceeds this "
                         "(0 disables). Independent of the strategy.")
+    p.add_argument("--gap-guard", type=float, default=0.0,
+                   help="skip BUYS on names that gapped up more than this fraction overnight "
+                        "(e.g. 0.04 = 4%%) to avoid chasing a gap. 0 disables.")
     args = p.parse_args(argv)
 
     strat = STRATEGIES[args.strategy]
-    weights, as_of = target_book(strat)
+    weights, as_of, close = target_book(strat)
 
     client = _client()
     # Alpaca SDK returns broad union types (RawData | model); narrow for the type checker.
@@ -149,22 +172,47 @@ def main(argv: list[str] | None = None) -> int:
     if tripped:
         weights = {}
 
+    # Per-trade rationale (signals behind each holding) — printed and logged for audit.
+    book = explain_book(weights, close, benchmark=BENCHMARK)
+    log_rationale(book, as_of, strat.name)
+
+    # Pre-market / overnight: compare the latest (extended-hours) price to the last close
+    # so we see how the market moved before we trade. Optionally guard against chasing gaps.
+    last_close = close.iloc[-1]
+    latest = latest_prices([r["symbol"] for r in book])
+    gaps = {s: (latest[s] / float(last_close.get(s, latest[s])) - 1.0)
+            for s in latest if s in last_close.index}
+    guarded: set[str] = set()
+    if args.gap_guard > 0:
+        for s, g in gaps.items():
+            if g > args.gap_guard and weights.get(s, 0) > current_value.get(s, 0) / equity:
+                guarded.add(s)
+        for s in guarded:
+            weights[s] = current_value.get(s, 0.0) / equity  # hold current, don't add
+
     plan = rebalance_plan(weights, equity, current_value)
 
     print(f"Strategy: {strat.name}   as-of close: {as_of}")
     print(f"Account:  equity ${equity:,.2f}   positions held: {len(positions)}")
     print(f"Safety net: peak ${peak:,.0f}  drawdown {dd:+.1%}  limit -{args.max_drawdown:.0%}  "
           f"-> {'TRIPPED — flattening to cash' if tripped else 'ok'}\n")
-    print("TARGET BOOK:")
-    for sym, w in sorted(weights.items(), key=lambda kv: -kv[1]):
-        if w > 0:
-            print(f"  {sym:5} {w:6.1%}  (${w*equity:,.0f})")
+
+    print("TARGET BOOK & RATIONALE:")
+    for r in book:
+        s = r["symbol"]
+        gap = gaps.get(s)
+        gap_str = f"  | overnight {gap:+.1%}{' [GAP-GUARD: not adding]' if s in guarded else ''}" \
+            if gap is not None else ""
+        print(f"  {s:5} {r['weight']:6.1%}  (${r['weight']*equity:,.0f}){gap_str}")
+        print(f"        ↳ {r['reason']}")
+
     print(f"\nREBALANCE PLAN ({len(plan)} orders, min ${MIN_TRADE_USD:.0f}):")
     if not plan:
         print("  (already aligned — nothing to do)")
     for t in plan:
         print(f"  {t['side']:4} ${t['notional']:>9,.2f} {t['symbol']:5}  "
               f"(${t['current']:,.0f} -> ${t['target']:,.0f})")
+    print(f"\n(rationale logged to {TRADE_LOG_PATH})")
 
     if args.submit:
         if not plan:

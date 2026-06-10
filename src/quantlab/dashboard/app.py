@@ -209,6 +209,21 @@ def render_allocation_panel(state: dict[str, Any]) -> None:
             st.info("No target weights.")
 
 
+def render_sleeve_decomposition(state: dict[str, Any]) -> None:
+    """Show where each position's weight comes from across the three sub-strategy sleeves."""
+    decomp = state.get("sleeve_decomposition") or []
+    if not decomp:
+        return
+    st.subheader("Why these weights — sleeve decomposition")
+    st.caption("Each holding's weight = the sum of its contributions from the three sleeves "
+               "(DualMomentum ×0.50, VolatilityManaged ×0.25, SwingPivotBreakout ×0.25). "
+               "A name held by more than one sleeve accumulates weight.")
+    df = pd.DataFrame(decomp).set_index("symbol")
+    pct = {c: "{:.1%}" for c in df.columns}
+    st.dataframe(df.style.format(cast(Any, pct)).background_gradient(
+        cmap="Greens", subset=["total"]), width="stretch")
+
+
 def _heat_color(value: float, vmin: float, vmax: float) -> str:
     """Map a value to a CSS background color (light -> deep blue).
 
@@ -369,6 +384,8 @@ def main() -> None:
     render_regime_panel(state)
     st.divider()
     render_allocation_panel(state)
+    st.divider()
+    render_sleeve_decomposition(state)
     st.divider()
     render_transition_matrix(state)
     st.divider()

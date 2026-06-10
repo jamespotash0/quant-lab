@@ -59,6 +59,7 @@ def run_backtest(
     start: str | None = None,
     end: str | None = None,
     risk_overlay: "RiskOverlay | None" = None,
+    gap_guard: float = 0.0,
 ) -> BacktestResult:
     """Run ``strategy`` over ``bars`` (a {symbol: OHLCV} dict) and return results."""
     from ..data_pipeline.loaders import to_panel
@@ -94,6 +95,9 @@ def run_backtest(
         # 1) Execute yesterday's decision at today's OPEN.
         if pending is not None:
             op = open_val.loc[date]
+            # Overnight gap from the decision close (yesterday) to the execution open
+            # (today). Known AT the open, so using it to veto a fill is not lookahead.
+            prev_close = close_val.loc[dates[i - 1]] if i > 0 else None
             equity_at_open = cash + position_value(op)
             traded_notional = 0.0
             symbols = set(shares) | set(pending)
@@ -103,6 +107,12 @@ def run_backtest(
                     continue  # can't trade what we can't price
                 target_shares = pending.get(sym, 0.0) * equity_at_open / price
                 delta = target_shares - shares.get(sym, 0.0)
+                # Gap guard: don't *add* to a name that gapped up past the threshold
+                # overnight (avoid chasing). Trims/exits still execute.
+                if gap_guard > 0.0 and delta > 0.0 and prev_close is not None:
+                    pc = prev_close.get(sym)
+                    if pc is not None and not pd.isna(pc) and pc > 0 and price / pc - 1.0 > gap_guard:
+                        continue
                 if delta == 0.0:
                     continue
                 traded_notional += abs(delta * price)
