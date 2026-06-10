@@ -330,7 +330,7 @@ def _equity_chart(curve_df: pd.DataFrame) -> "alt.LayerChart":
             + [alt.Tooltip(f"{s}:Q", title=s, format="$,.0f") for s in series],
         )
     )
-    return alt.layer(lines, selectors, points, rule).interactive(bind_y=False)
+    return cast(Any, alt.layer(lines, selectors, points, rule).interactive(bind_y=False))
 
 
 # --------------------------------------------------------------------------- #
