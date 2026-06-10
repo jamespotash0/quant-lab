@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 from typing import Any, cast
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -293,9 +294,43 @@ def render_equity_curve(state: dict[str, Any]) -> None:
     curve_df = pd.DataFrame(curve)
     if "date" in curve_df.columns:
         curve_df["date"] = pd.to_datetime(curve_df["date"])
-        curve_df = curve_df.set_index("date")
     curve_df = curve_df.rename(columns={"equity": "Strategy", "sp500": "S&P 500"})
-    st.line_chart(curve_df)
+    st.altair_chart(_equity_chart(curve_df), use_container_width=True)
+
+
+def _equity_chart(curve_df: pd.DataFrame) -> "alt.LayerChart":
+    """Multi-line equity chart with a shared crosshair tooltip that shows every
+    series' value at the hovered date (Strategy + S&P 500)."""
+    series = [c for c in curve_df.columns if c != "date"]
+    long = curve_df.melt("date", value_vars=series, var_name="series", value_name="value")
+
+    base = alt.Chart(long).encode(
+        x=alt.X("date:T", title=None),
+        color=alt.Color("series:N", title=None,
+                        legend=alt.Legend(orient="top-left")),
+    )
+    lines = base.mark_line().encode(
+        y=alt.Y("value:Q", title="Equity ($)", axis=alt.Axis(format="$,.0s")),
+    )
+    # Invisible vertical selector tracking the nearest date under the cursor.
+    nearest = alt.selection_point(nearest=True, on="mouseover", fields=["date"], empty=False)
+    selectors = base.mark_point().encode(opacity=alt.value(0)).add_params(nearest)
+    points = lines.mark_point(size=55).encode(
+        opacity=alt.condition(nearest, alt.value(1), alt.value(0)),
+    )
+    # One rule at the hovered date; pivot so a single tooltip lists both series.
+    rule = (
+        alt.Chart(long)
+        .transform_pivot("series", value="value", groupby=["date"])
+        .mark_rule(color="gray")
+        .encode(
+            x="date:T",
+            opacity=alt.condition(nearest, alt.value(0.3), alt.value(0)),
+            tooltip=[alt.Tooltip("date:T", title="Date")]
+            + [alt.Tooltip(f"{s}:Q", title=s, format="$,.0f") for s in series],
+        )
+    )
+    return alt.layer(lines, selectors, points, rule).interactive(bind_y=False)
 
 
 # --------------------------------------------------------------------------- #
