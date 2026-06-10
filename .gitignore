@@ -1,0 +1,13 @@
+data/
+.env
+.env.*
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.parquet
+*.db
+.DS_Store
+
+# build artifacts
+*.egg-info/

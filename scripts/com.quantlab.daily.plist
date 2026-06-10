@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd schedule for the autonomous daily paper-trading routine (macOS).
+
+  Runs scripts/run_daily.sh every weekday at 16:15 LOCAL time. The strategy decides on the
+  close and the orders are market-DAY orders, so running ~15 min after the US close queues
+  them to fill at the NEXT session's open (matching the backtest). If your Mac is asleep at
+  16:15, launchd runs the job when it next wakes (RunAtLoad + the missed StartCalendarInterval).
+
+  ADJUST: set the <string> path below to YOUR repo path, and the Hour to ~15 min after your
+  local market-close time (16:15 = 4:15pm; if you're not on US-East time, use your local
+  equivalent of 4:15pm ET).
+
+  Install:
+    cp scripts/com.quantlab.daily.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.quantlab.daily.plist
+  Remove:
+    launchctl unload ~/Library/LaunchAgents/com.quantlab.daily.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.quantlab.daily</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/james/Desktop/Coding/AI_apps/quant-lab/scripts/run_daily.sh</string>
+  </array>
+
+  <!-- Weekdays (Mon=1 .. Fri=5) at 16:15 local. -->
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>15</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>16</integer><key>Minute</key><integer>15</integer></dict>
+  </array>
+
+  <key>StandardOutPath</key>
+  <string>/Users/james/Desktop/Coding/AI_apps/quant-lab/data/logs/launchd.out</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/james/Desktop/Coding/AI_apps/quant-lab/data/logs/launchd.err</string>
+</dict>
+</plist>
